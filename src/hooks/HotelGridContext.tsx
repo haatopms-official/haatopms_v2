@@ -161,14 +161,15 @@ export function HotelGridProvider({ children }: { children: React.ReactNode }) {
     }));
   }, [setData]);
 
-  const addRoom = useCallback((categoryId: string, roomNumber: number) => {
+const addRoom = useCallback((categoryId: string, roomNumber: number) => {
     if (!Number.isFinite(roomNumber) || roomNumber <= 0) return { ok: false, reason: 'invalid' as const };
-    const allNumbers = new Set([...baseRooms.map((r) => r.number), ...(data.extraRooms ?? []).map((r) => r.number)]);
-    if (allNumbers.has(roomNumber) && !removedRoomNumbers.has(roomNumber)) return { ok: false, reason: 'exists' as const };
+    const baseNumbers = new Set(baseRooms.map((r) => r.number));
+    const extraNumbers = new Set((data.extraRooms ?? []).map((r) => r.number));
+    const isTaken = extraNumbers.has(roomNumber) || (baseNumbers.has(roomNumber) && !removedRoomNumbers.has(roomNumber));
+    if (isTaken) return { ok: false, reason: 'exists' as const };
     setData((prev) => ({
       ...prev,
       extraRooms: [...(prev.extraRooms ?? []), { number: roomNumber, category: categoryId as RoomCategory }],
-      removedRoomNumbers: (prev.removedRoomNumbers ?? []).filter((n) => n !== roomNumber),
     }));
     return { ok: true };
   }, [baseRooms, data.extraRooms, removedRoomNumbers, setData]);
