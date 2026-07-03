@@ -200,4 +200,66 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         action: "auth.login",
         summary: `${u} signed in`,
       });
-      return { ok: true, role: entry.role
+      return { ok: true, role: entry.role };
+    },
+    [findByUsername, log, pushHistory],
+  );
+
+  const logout = useCallback(() => {
+    if (user) {
+      const at = new Date().toISOString();
+      pushHistory({
+        username: user.username,
+        role: user.role,
+        action: "logout",
+        at,
+        adminId: user.adminId,
+        displayName: user.displayName,
+      });
+      log({
+        actor: { username: user.username, role: user.role, adminId: user.adminId },
+        category: "auth",
+        action: "auth.logout",
+        summary: `${user.displayName ?? user.username} signed out`,
+      });
+    }
+    setUser(null);
+  }, [user, log, pushHistory]);
+
+  const switchRole = useCallback((role: UserRole) => {
+    if (!user?.canSwitchWorkspaces) return;
+    const next: AuthUser = {
+      username: user.username,
+      role,
+      displayName: role,
+      canSwitchWorkspaces: true,
+    };
+    setUser(next);
+    log({
+      actor: { username: user.username, role: user.role, adminId: user.adminId },
+      category: "auth",
+      action: "auth.role_switch",
+      summary: `Switched workspace to ${role}`,
+    });
+  }, [user, log]);
+
+  const value = useMemo(
+    () => ({ user, ready, login, switchRole, logout, history, clearHistory }),
+    [user, ready, login, switchRole, logout, history, clearHistory],
+  );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+export function useAuth() {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error("useAuth must be used within AuthProvider");
+  return ctx;
+}
+
+export const ROLE_HOME = {
+  superuser: "/superuser",
+  director: "/director",
+  admin: "/admin",
+  manager: "/manager",
+} as const satisfies Record<UserRole, string>;
