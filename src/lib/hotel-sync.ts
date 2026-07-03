@@ -3,7 +3,7 @@ import { supabase } from '@/integrations/supabase/client';
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
 const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string;
 
-export type HotelStateKey = 'bookings' | 'grid' | 'admins' | 'audit' | 'auth-history' | 'guests';
+export type HotelStateKey = 'bookings' | 'grid' | 'admins' | 'audit' | 'auth-history' | 'guests' | 'anketas' | 'passports';
 
 interface Row<T> { state_data: T; version: number; updated_at: string }
 
