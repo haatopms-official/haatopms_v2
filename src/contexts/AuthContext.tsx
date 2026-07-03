@@ -10,6 +10,7 @@ import {
 import { useAdmins } from "./AdminsContext";
 import { useAudit } from "./AuditContext";
 import { useAuthHistory } from "./AuthHistoryContext";
+import { computeShiftWindow } from "./ShiftContext";
 import type { UserRole, LoginEvent } from "./auth-types";
 
 // Re-export so all existing imports of UserRole and LoginEvent from AuthContext keep working
@@ -21,6 +22,7 @@ interface AuthUser {
   canSwitchWorkspaces?: boolean;
   adminId?: string | null;
   displayName?: string;
+  loginAt?: string;
 }
 
 interface AuthContextValue {
@@ -57,6 +59,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const raw = sessionStorage.getItem(STORAGE_KEY);
       const parsed = raw ? (JSON.parse(raw) as AuthUser) : null;
+      // If this was an admin session and its shift boundary has already
+      // passed (e.g. the tab was asleep or the machine was off through the
+      // 06:00/18:00 cutoff), don't silently resurrect it — treat it as
+      // logged out and record the closing event.
+      if (parsed && parsed.role === "admin" && parsed.loginAt) {
+        const shiftEnd = computeShiftWindow(new Date(parsed.loginAt)).end;
+        if (new Date().getTime() >= shiftEnd.getTime()) {
+          try {
+            pushHistory({
+              username: parsed.username,
+              role: "admin",
+              action: "logout",
+              at: shiftEnd.toISOString(),
+              adminId: parsed.adminId,
+              displayName: parsed.displayName,
+            });
+            log({
+              actor: { username: parsed.username, role: "admin", adminId: parsed.adminId ?? null },
+              category: "auth",
+              action: "auth.logout",
+              summary: `${parsed.displayName ?? parsed.username} was automatically signed out (shift ended)`,
+            });
+          } catch { /* ignore */ }
+          setUser(null);
+          try { sessionStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+          try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+          setReady(true);
+          return;
+        }
+      }
       setUser(
         parsed
           ? {
@@ -73,6 +105,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setReady(true);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Persist current session to sessionStorage
@@ -114,14 +147,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // 1) Try a registered admin first.
       const admin = findByUsername(u);
       if (admin && admin.password === password) {
+        const at = new Date().toISOString();
         const next: AuthUser = {
           username: admin.username,
           role: "admin",
           adminId: admin.id,
           displayName: `${admin.name} ${admin.surname}`.trim(),
+          loginAt: at,
         };
         setUser(next);
-        const at = new Date().toISOString();
         pushHistory({
           username: next.username,
           role: "admin",
@@ -144,14 +178,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!entry || entry.password !== password) {
         return { ok: false, error: "Invalid username or password" };
       }
+      const at = new Date().toISOString();
       const next: AuthUser = {
         username: u,
         role: entry.role,
         displayName: u,
         canSwitchWorkspaces: entry.role === "superuser",
+        loginAt: at,
       };
       setUser(next);
-      const at = new Date().toISOString();
       pushHistory({
         username: u,
         role: entry.role,
@@ -165,66 +200,4 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         action: "auth.login",
         summary: `${u} signed in`,
       });
-      return { ok: true, role: entry.role };
-    },
-    [findByUsername, log, pushHistory],
-  );
-
-  const logout = useCallback(() => {
-    if (user) {
-      const at = new Date().toISOString();
-      pushHistory({
-        username: user.username,
-        role: user.role,
-        action: "logout",
-        at,
-        adminId: user.adminId,
-        displayName: user.displayName,
-      });
-      log({
-        actor: { username: user.username, role: user.role, adminId: user.adminId },
-        category: "auth",
-        action: "auth.logout",
-        summary: `${user.displayName ?? user.username} signed out`,
-      });
-    }
-    setUser(null);
-  }, [user, log, pushHistory]);
-
-  const switchRole = useCallback((role: UserRole) => {
-    if (!user?.canSwitchWorkspaces) return;
-    const next: AuthUser = {
-      username: user.username,
-      role,
-      displayName: role,
-      canSwitchWorkspaces: true,
-    };
-    setUser(next);
-    log({
-      actor: { username: user.username, role: user.role, adminId: user.adminId },
-      category: "auth",
-      action: "auth.role_switch",
-      summary: `Switched workspace to ${role}`,
-    });
-  }, [user, log]);
-
-  const value = useMemo(
-    () => ({ user, ready, login, switchRole, logout, history, clearHistory }),
-    [user, ready, login, switchRole, logout, history, clearHistory],
-  );
-
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
-}
-
-export function useAuth() {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error("useAuth must be used within AuthProvider");
-  return ctx;
-}
-
-export const ROLE_HOME = {
-  superuser: "/superuser",
-  director: "/director",
-  admin: "/admin",
-  manager: "/manager",
-} as const satisfies Record<UserRole, string>;
+      return { ok: true, role: entry.role

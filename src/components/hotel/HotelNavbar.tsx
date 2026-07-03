@@ -15,7 +15,7 @@ import {
 import { useAuth } from '@/contexts/AuthContext';
 import { LogoutDialog } from '@/components/auth/LogoutDialog';
 import { motion } from 'framer-motion';
-import { useShift, useNow, formatRemaining } from '@/contexts/ShiftContext';
+import { useShift, useNow, formatRemaining, computeShiftWindow } from '@/contexts/ShiftContext';
 import { useTheme } from '@/hooks/ThemeContext';
 
 interface HotelNavbarProps {
@@ -80,7 +80,7 @@ export function HotelNavbar({ viewMode, onViewModeChange }: HotelNavbarProps) {
   // "active" if their most recent event in the log is a `login` (no later
   // `logout`). Lets superuser / director / manager see who is on the floor
   // even when several admins are working simultaneously across browsers.
-  const activeAdmins = useMemo(() => {
+const activeAdmins = useMemo(() => {
     const latest = new Map<string, { username: string; displayName?: string; at: string; action: 'login' | 'logout' }>();
     for (const ev of history) {
       if (ev.role !== 'admin') continue;
@@ -89,8 +89,12 @@ export function HotelNavbar({ viewMode, onViewModeChange }: HotelNavbarProps) {
         latest.set(ev.username, { username: ev.username, displayName: ev.displayName, at: ev.at, action: ev.action });
       }
     }
-    return Array.from(latest.values()).filter((e) => e.action === 'login');
-  }, [history]);
+    return Array.from(latest.values()).filter((e) => {
+      if (e.action !== 'login') return false;
+      const shiftEnd = computeShiftWindow(new Date(e.at)).end.getTime();
+      return now.getTime() < shiftEnd;
+    });
+  }, [history, now]);
 
   const handleWorkspaceSwitch = (to: typeof roles[number]['to']) => {
     if (location.pathname === to && user?.role === to.slice(1)) return;

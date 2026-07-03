@@ -23,7 +23,7 @@ export function DirectorShiftPanel() {
   const now = useNow();
 
   // Derive "currently signed-in admin" from the auth history.
-  const liveAdmin = useMemo(() => {
+const liveAdmin = useMemo(() => {
     // History is stored newest-first.
     const seen = new Set<string>();
     for (const ev of history) {
@@ -31,6 +31,8 @@ export function DirectorShiftPanel() {
       if (seen.has(key)) continue;
       seen.add(key);
       if (ev.action === "login" && ev.role === "admin") {
+        const shiftEnd = computeShiftWindow(new Date(ev.at)).end.getTime();
+        if (now.getTime() >= shiftEnd) continue;
         const record = admins.find((a) => a.username.toLowerCase() === key);
         const displayName = record
           ? `${record.name} ${record.surname}`.trim() || record.username
@@ -39,7 +41,7 @@ export function DirectorShiftPanel() {
       }
     }
     return null;
-  }, [history, admins]);
+  }, [history, admins, now]);
 
   // Build an effective session — prefer the real signed-in admin, then fall back to manual session.
   const effective = useMemo(() => {
