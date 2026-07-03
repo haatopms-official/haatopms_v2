@@ -30,7 +30,6 @@ import { UnsavedCloseWarning } from './UnsavedCloseWarning';
 import { HotelDatePicker } from './HotelDatePicker';
 import { CountrySelect } from './CountrySelect';
 import { isValidEmail, isValidPhone } from '@/lib/contactValidation';
-import { useHotelGrid } from '@/hooks/HotelGridContext';
 
 interface AnketaModalProps {
   open: boolean;

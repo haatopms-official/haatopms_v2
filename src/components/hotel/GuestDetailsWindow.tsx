@@ -28,8 +28,6 @@ import {
   Zap,
   X,
 } from 'lucide-react';
-import { HotelDatePicker } from './HotelDatePicker';
-import { CountrySelect } from './CountrySelect';
 
 interface GuestDetailsWindowProps {
   open: boolean;
