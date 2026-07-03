@@ -7,6 +7,8 @@ import { format, parseISO } from 'date-fns';
 import { useI18n } from '@/hooks/useI18n';
 import type { Booking } from '@/types/hotel';
 import { formatPrice } from '@/lib/formatPrice';
+import { sumSegments } from '@/lib/bookingPricing';
+import { useHotelGrid } from '@/hooks/HotelGridContext';
 
 interface ReceiptModalProps {
   open: boolean;
@@ -36,17 +38,29 @@ export function HotelReceiptModal({
   paymentAmount, categoryLabel, payments, totalAmount,
 }: ReceiptModalProps) {
   const { lang } = useI18n();
+  const { categories } = useHotelGrid();
   const L = (ru: string, en: string, uz?: string) =>
     lang === 'ru' ? ru : lang === 'uz' ? (uz ?? en) : en;
   const history = payments && payments.length ? payments : (booking?.payments ?? []);
-  const total = totalAmount && totalAmount > 0
-    ? totalAmount
-    : (booking?.paymentAmount ?? Number(paymentAmount) ?? 0);
+  const segments = booking?.segments;
+  const hasSegments = !!segments && segments.length > 0;
+  const segmentsTotal = hasSegments ? sumSegments(segments) : 0;
+  const total = hasSegments
+    ? segmentsTotal
+    : (totalAmount && totalAmount > 0
+      ? totalAmount
+      : (booking?.paymentAmount ?? Number(paymentAmount) ?? 0));
   const paidSum = history.reduce((s, p) => s + (Number(p.amount) || 0), 0);
   const fullyPaid = total > 0 && paidSum >= total;
   const overallPct = total > 0 ? Math.round((paidSum / total) * 100) : 0;
   const methodLabel = (m: 'cash' | 'card' | 'transfer') =>
     ({ cash: L('Наличные', 'Cash'), card: L('Карта', 'Card'), transfer: L('Перевод', 'Transfer') } as const)[m];
+  const categoryName = (id: string) => {
+    const c = categories.find((x) => x.id === id);
+    if (!c) return id;
+    const label = c.label as Record<string, string> | undefined;
+    return (label && (label[lang] || label.en)) || c.short || id;
+  };
 
   const handlePrint = () => {
     const node = document.querySelector('.receipt-paper');
@@ -152,6 +166,45 @@ export function HotelReceiptModal({
               <Row k={L('Кол-во ночей', 'Nights')} v={Number.isInteger(nights) ? String(nights) : nights.toFixed(1)} />
               <Row k={L('Контакт', 'Contact')} v={booking?.guestPhone || booking?.guestEmail || '—'} />
             </section>
+            {hasSegments && (
+              <section className="mt-6">
+                <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">
+                  {L('Разбивка по категориям (смена номера)', 'Stay breakdown (room change)', 'Toifalar bo\u02bcyicha taqsimot')}
+                </p>
+                <div className="mt-2 overflow-hidden rounded-lg border border-slate-300">
+                  <table className="w-full text-xs">
+                    <thead className="bg-slate-100 text-slate-600">
+                      <tr>
+                        <th className="px-3 py-1.5 text-left font-black uppercase tracking-wider">#</th>
+                        <th className="px-3 py-1.5 text-left font-black uppercase tracking-wider">{L('Категория', 'Category')}</th>
+                        <th className="px-3 py-1.5 text-left font-black uppercase tracking-wider">{L('Комната', 'Room')}</th>
+                        <th className="px-3 py-1.5 text-left font-black uppercase tracking-wider">{L('Период', 'Period')}</th>
+                        <th className="px-3 py-1.5 text-right font-black uppercase tracking-wider">{L('Ночей', 'Nights')}</th>
+                        <th className="px-3 py-1.5 text-right font-black uppercase tracking-wider">{L('Цена/ночь', 'Rate/night')}</th>
+                        <th className="px-3 py-1.5 text-right font-black uppercase tracking-wider">{L('Сумма', 'Amount')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {segments!.map((seg, i) => (
+                        <tr key={i} className="border-t border-slate-200">
+                          <td className="px-3 py-1.5 font-mono">{i + 1}</td>
+                          <td className="px-3 py-1.5">{categoryName(seg.categoryId)}</td>
+                          <td className="px-3 py-1.5 font-mono">№ {seg.roomNumber}</td>
+                          <td className="px-3 py-1.5">{safeFmt(seg.from)} → {safeFmt(seg.to)}</td>
+                          <td className="px-3 py-1.5 text-right tabular-nums">{seg.nights}</td>
+                          <td className="px-3 py-1.5 text-right tabular-nums">{formatPrice(seg.perNightRate)}</td>
+                          <td className="px-3 py-1.5 text-right font-bold tabular-nums">{formatPrice(seg.price)}</td>
+                        </tr>
+                      ))}
+                      <tr className="border-t border-slate-300 bg-slate-50">
+                        <td className="px-3 py-1.5 font-black" colSpan={6}>{L('Итого по проживанию', 'Stay total')}</td>
+                        <td className="px-3 py-1.5 text-right font-black tabular-nums">{formatPrice(segmentsTotal)}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            )}
 
             <section className="mt-6 rounded-xl border border-slate-300 bg-slate-50 p-4">
               <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">{L('Оплата', 'Payment')}</p>

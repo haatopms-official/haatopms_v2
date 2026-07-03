@@ -8,7 +8,7 @@ import { AddCategoryDialog, AddRoomDialog } from './HotelCategoryDialogs';
 import { toast } from 'sonner';
 import { BookingBar } from './BookingBar';
 import { TimelineBottomScrollbar } from './TimelineBottomScrollbar';
-
+import { splitBookingAt, sumSegments } from '@/lib/bookingPricing';
 import { BookingDialog } from './BookingDialog';
 import { useI18n } from '@/hooks/useI18n';
 import { useAuth } from '@/contexts/AuthContext';
@@ -1213,6 +1213,51 @@ export function HotelRoomGrid({ bookings, conflictBookings = bookings, onAddBook
   const confirmMove = useCallback(() => {
     if (!moveConfirm) return;
     const { booking, targetRoom, targetBed, targetCheckIn, targetCheckOut } = moveConfirm;
+
+    // Hold-and-drop mid-stay category change: when an in-house booking is moved
+    // to a room of a DIFFERENT category while dates stay identical, split the
+    // stay at today. Old room keeps the nights already lived, new room takes
+    // the remaining nights; final price is the sum of both legs.
+    const fromRoom = rooms.find((r) => r.number === booking.roomNumber);
+    const toRoom = rooms.find((r) => r.number === targetRoom);
+    const sameDates = targetCheckIn === booking.checkIn && targetCheckOut === booking.checkOut;
+    const isCategoryChange = !!(fromRoom && toRoom && fromRoom.category !== toRoom.category);
+    const todayIso = format(new Date(), 'yyyy-MM-dd');
+    const canSplit =
+      sameDates &&
+      isCategoryChange &&
+      booking.status === 'in-house' &&
+      booking.checkIn < todayIso &&
+      todayIso < booking.checkOut;
+
+    if (canSplit && toRoom && fromRoom) {
+      const segments = splitBookingAt({
+        booking,
+        splitDate: todayIso,
+        newRoomNumber: targetRoom,
+        newCategoryId: toRoom.category,
+        oldCategoryId: fromRoom.category,
+        residency: (booking.residency ?? 'resident') as 'resident' | 'nonResident',
+        categoryRates,
+      });
+      if (segments) {
+        const total = sumSegments(segments);
+        onUpdateBooking(booking.id, {
+          roomNumber: targetRoom,
+          bedIndex: targetBed,
+          segments,
+          price: total,
+          paymentAmount: total,
+        });
+        toast.success(lang === 'ru'
+          ? `Категория изменена · ${segments.length} сегмента, итого ${total.toLocaleString('ru-RU')} сум`
+          : `Category changed · ${segments.length} legs, total ${total.toLocaleString('en-US')} UZS`);
+        moveResolvedRef.current = true;
+        setMoveConfirm(null);
+        return;
+      }
+    }
+
     onUpdateBooking(booking.id, {
       roomNumber: targetRoom,
       bedIndex: targetBed,
@@ -1222,7 +1267,7 @@ export function HotelRoomGrid({ bookings, conflictBookings = bookings, onAddBook
     toast.success(lang === 'ru' ? 'Бронирование перемещено' : 'Booking moved');
     moveResolvedRef.current = true;
     setMoveConfirm(null);
-  }, [moveConfirm, onUpdateBooking, lang]);
+  }, [moveConfirm, onUpdateBooking, lang, rooms, categoryRates]);
 
   const cancelMove = useCallback(() => {
     if (moveResolvedRef.current) {

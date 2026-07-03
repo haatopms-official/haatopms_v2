@@ -109,6 +109,31 @@ export interface Booking {
    * never lets users toggle it.
    */
   bookingChannel?: 'online' | 'offline';
+  /**
+   * Ordered stay segments for bookings whose room/category changed mid-stay
+   * (hold-and-drop). Each segment records the room the guest slept in for a
+   * date range plus the price of that leg. When present, the receipt renders
+   * a per-segment breakdown and the total price is the sum of segments.
+   * Legacy single-room bookings have this field undefined.
+   */
+  segments?: BookingSegment[];
+}
+
+/**
+ * A single leg of a stay that spanned multiple rooms/categories.
+ * `from`/`to` are ISO yyyy-MM-dd, half-open [from, to). Nights = date diff.
+ * `perNightRate` and `price` are computed from categoryRates at the time of
+ * the split so the receipt stays stable even if rates change later.
+ */
+export interface BookingSegment {
+  roomNumber: number;
+  categoryId: string;
+  from: string;
+  to: string;
+  nights: number;
+  guestCount: number;
+  perNightRate: number;
+  price: number;
 }
 
 export function generateRooms(): Room[] {

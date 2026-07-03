@@ -42,7 +42,7 @@ export const getHotelState = createServerFn({ method: "GET" })
       "@/integrations/supabase/client.server"
     );
 
-    const { data: row, error } = await supabaseAdmin
+    const { data: row, error } = await (supabaseAdmin as any)
       .from("hotel_app_state")
       .select("state_data, version, updated_at")
       .eq("state_key", data.key)
@@ -73,7 +73,7 @@ export const setHotelState = createServerFn({ method: "POST" })
       "@/integrations/supabase/client.server"
     );
 
-    const { data: row, error } = await supabaseAdmin
+    const { data: row, error } = await (supabaseAdmin as any)
       .from("hotel_app_state")
       .upsert(
         {

@@ -35,7 +35,7 @@ export function useSharedState<T>(key: HotelStateKey, initial: T) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const { data: row, error } = await supabase
+      const { data: row, error } = await (supabase as any)
         .from('hotel_app_state')
         .select('state_data, version')
         .eq('state_key', key)
@@ -47,7 +47,7 @@ export function useSharedState<T>(key: HotelStateKey, initial: T) {
         setDataState(row.state_data as T);
       } else {
         // Seed row so realtime UPDATEs work for everyone
-        const { data: seeded } = await supabase
+        const { data: seeded } = await (supabase as any)
           .rpc('hotel_app_state_cas', { p_key: key, p_expected_version: 0, p_state_data: initial as any })
           .select()
           .maybeSingle();
@@ -112,7 +112,7 @@ export function useSharedState<T>(key: HotelStateKey, initial: T) {
         let candidate = committedRef.current;
         for (const fn of updaters) candidate = fn(candidate);
 
-        const { data: rows, error } = await supabase.rpc('hotel_app_state_cas', {
+        const { data: rows, error } = await (supabase as any).rpc('hotel_app_state_cas', {
           p_key: key,
           p_expected_version: expected,
           p_state_data: candidate as any,
