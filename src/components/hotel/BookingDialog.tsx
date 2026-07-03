@@ -23,6 +23,7 @@ import { GuestDetailsWindow } from './GuestDetailsWindow';
 import { DeleteBookingModal } from './DeleteBookingModal';
 import { HotelDatePicker } from './HotelDatePicker';
 import { validateContactBundle, isValidEmail, isValidPhone, isValidHandle } from '@/lib/contactValidation';
+import { sumSegments } from '@/lib/bookingPricing';
 import { HotelReceiptModal } from './HotelReceiptModal';
 import { Receipt } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
@@ -251,18 +252,33 @@ export function BookingDialog({
     return base + extras * extraRate;
   }, [categoryRateArr, guestMultiplier]);
   const categoryRate = perNightRate;
-  const computedPaymentTotal = perNightRate > 0 ? Math.round(nightsDisplay * perNightRate) : 0;
+  // Hold-and-drop segments: when an in-house booking was moved mid-stay to a
+  // different category, the receipt/payment total must be the SUM of each leg
+  // (nights lived in old category × old per-night rate) + (nights in new
+  // category × new per-night rate). Each segment already stores its snapshotted
+  // per-night rate and price, so we just sum them.
+  const segmentsList = editBooking?.segments;
+  const hasSegments = !!segmentsList && segmentsList.length > 0;
+  const segmentsTotal = hasSegments ? sumSegments(segmentsList!) : 0;
+  const segmentCategoryLabel = useCallback((catId: string) => {
+    const c = categories.find(cc => cc.id === catId);
+    return c ? (c.label[lang] || c.label.en) : catId;
+  }, [categories, lang]);
+  const computedPaymentTotal = hasSegments
+    ? segmentsTotal
+    : (perNightRate > 0 ? Math.round(nightsDisplay * perNightRate) : 0);
   const paymentTypeLabel = ({ cash: 'Наличные', card: 'Карта', transfer: 'Перечисление' } as const)[paymentType];
   const paymentTimingLabel = ({ full_now: '100% сразу', half_now: '50% сразу', quarter_now: '25% сразу', after_checkout: 'После выезда' } as const)[paymentTiming];
   /** Effective total — what we compare paid sum against. Live-recomputes when guest count or rate changes. */
   const effectiveTotal = useMemo(() => {
+    if (hasSegments) return segmentsTotal;
     if (computedPaymentTotal > 0) return computedPaymentTotal;
     const parsed = Number(paymentAmount);
     if (paymentAmount.trim() && Number.isFinite(parsed) && parsed > 0) return Math.max(0, parsed);
     if (editBooking?.price !== undefined) return editBooking.price;
     const p = Number(price);
     return price.trim() && Number.isFinite(p) ? Math.max(0, p) : 0;
-  }, [paymentAmount, editBooking?.price, computedPaymentTotal, price]);
+  }, [hasSegments, segmentsTotal, paymentAmount, editBooking?.price, computedPaymentTotal, price]);
   const paidSum = useMemo(() => payments.reduce((s, p) => s + (Number(p.amount) || 0), 0), [payments]);
   const remainingAmount = Math.max(0, effectiveTotal - paidSum);
   const isFullyPaid = effectiveTotal > 0 && paidSum >= effectiveTotal;
@@ -633,6 +649,33 @@ export function BookingDialog({
                       icon={<DollarSign className="h-3 w-3 text-emerald-500" />}
                     >
                       {(() => {
+                        // Hold-and-drop bookings: render a per-segment breakdown so
+                        // admin sees exactly how many nights were lived in each
+                        // category and at which rate. Grand total = sum of legs.
+                        if (hasSegments) {
+                          return (
+                            <div className="relative rounded-xl border border-emerald-200/60 dark:border-emerald-900/50 bg-gradient-to-br from-emerald-50/80 via-background to-emerald-50/40 dark:from-emerald-950/40 dark:via-background dark:to-emerald-950/20 px-3 py-2 flex flex-col gap-1 overflow-hidden">
+                              {segmentsList!.map((seg, i) => (
+                                <div key={`seg-${i}`} className="flex items-center justify-between gap-2 text-[10px] tabular-nums">
+                                  <span className="font-medium uppercase tracking-wider text-emerald-600/80 dark:text-emerald-400/80 truncate">
+                                    {seg.nights} × {formatPrice(seg.perNightRate)} · {segmentCategoryLabel(seg.categoryId)} · #{seg.roomNumber}
+                                  </span>
+                                  <span className="font-bold text-emerald-700 dark:text-emerald-300">
+                                    {formatPrice(seg.price)}
+                                  </span>
+                                </div>
+                              ))}
+                              <div className="mt-1 flex items-center justify-between border-t border-emerald-300/40 pt-1 text-[11px] tabular-nums">
+                                <span className="font-black uppercase tracking-wider text-emerald-700 dark:text-emerald-300">
+                                  {lang === 'ru' ? 'Итого' : lang === 'uz' ? 'Jami' : 'Total'}
+                                </span>
+                                <span className="font-black text-sm text-emerald-700 dark:text-emerald-300">
+                                  {formatPrice(segmentsTotal)}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        }
                         // Total to pay = nights × sum(per-guest prices for booked guests).
                         const total = Math.round(nightsDisplay * perNightRate);
                         return (
