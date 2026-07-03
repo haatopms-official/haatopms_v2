@@ -262,10 +262,13 @@ function AdminDetails({
   admins: ReturnType<typeof useAdmins>["admins"];
   auditEvents: AuditEvent[];
 }) {
-  const admin = event.adminId ? admins.find((a) => a.id === event.adminId) : undefined;
+const admin = event.adminId ? admins.find((a) => a.id === event.adminId) : undefined;
+  // Only actions performed on the same calendar day as this login/logout event.
   const userActions = useMemo(() => {
+    const eventDay = new Date(event.at).toDateString();
     return auditEvents
       .filter((a) => {
+        if (new Date(a.at).toDateString() !== eventDay) return false;
         if (event.adminId) return a.actor.adminId === event.adminId;
         return a.actor.username === event.username && a.actor.role === event.role;
       })

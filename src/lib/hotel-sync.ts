@@ -17,9 +17,17 @@ export function useSharedState<T>(key: HotelStateKey, initial: T) {
   const [data, setDataState] = useState<T>(initial);
   const [ready, setReady] = useState(false);
   const versionRef = useRef<number>(0);
-  const pendingRef = useRef<T | null>(null);
+  // The last state known to match `versionRef.current` on the server —
+  // i.e. the confirmed base, *without* any of our not-yet-flushed local edits.
+  const committedRef = useRef<T>(initial);
+  // Queue of local edits made since the last successful flush. Kept as
+  // updater functions (not a single precomputed value) so that, if the
+  // server has moved on, we can *rebase* our edits onto the fresh server
+  // state instead of blindly overwriting whatever another user just wrote.
+  const pendingUpdatersRef = useRef<Array<(prev: T) => T>>([]);
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const localEchoRef = useRef<number>(0); // ignore realtime for our own writes
+  const flushingRef = useRef<boolean>(false);
 
   // Initial load
   useEffect(() => {
@@ -33,6 +41,7 @@ export function useSharedState<T>(key: HotelStateKey, initial: T) {
       if (cancelled) return;
       if (!error && row) {
         versionRef.current = Number(row.version) || 0;
+        committedRef.current = row.state_data as T;
         setDataState(row.state_data as T);
       } else {
         // Seed row so realtime UPDATEs work for everyone
@@ -40,7 +49,10 @@ export function useSharedState<T>(key: HotelStateKey, initial: T) {
           .rpc('hotel_app_state_cas', { p_key: key, p_expected_version: 0, p_state_data: initial as any })
           .select()
           .maybeSingle();
-        if (seeded) versionRef.current = Number((seeded as any).version) || 1;
+        if (seeded) {
+          versionRef.current = Number((seeded as any).version) || 1;
+          committedRef.current = ((seeded as any).state_data as T) ?? initial;
+        }
       }
       setReady(true);
     })();
@@ -62,10 +74,22 @@ export function useSharedState<T>(key: HotelStateKey, initial: T) {
           if (v <= versionRef.current) return;
           if (localEchoRef.current && v === localEchoRef.current) {
             localEchoRef.current = 0;
+            versionRef.current = v;
+            committedRef.current = row.state_data as T;
             return;
           }
           versionRef.current = v;
-          setDataState(row.state_data as T);
+          committedRef.current = row.state_data as T;
+          // If we have local edits not yet confirmed by the server, keep them —
+          // reapply them on top of the fresh server state instead of discarding
+          // them (this is what previously made deletes/creates "flip back").
+          if (pendingUpdatersRef.current.length > 0) {
+            let next = row.state_data as T;
+            for (const fn of pendingUpdatersRef.current) next = fn(next);
+            setDataState(next);
+          } else {
+            setDataState(row.state_data as T);
+          }
         },
       )
       .subscribe();
@@ -73,42 +97,68 @@ export function useSharedState<T>(key: HotelStateKey, initial: T) {
   }, [key]);
 
   const flush = useCallback(async () => {
-    if (pendingRef.current === null) return;
-    const value = pendingRef.current;
-    pendingRef.current = null;
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const expected = versionRef.current;
-      const { data: rows, error } = await supabase.rpc('hotel_app_state_cas', {
-        p_key: key,
-        p_expected_version: expected,
-        p_state_data: value as any,
-      });
-      if (error) { console.error('[hotel-sync] cas error', error); return; }
-      const row = Array.isArray(rows) ? (rows[0] as Row<T> | undefined) : (rows as Row<T> | null);
-      if (!row) return;
-      const newV = Number(row.version) || 0;
-      if (newV === expected + 1) {
+    if (flushingRef.current) return; // avoid overlapping flushes
+    if (pendingUpdatersRef.current.length === 0) return;
+    flushingRef.current = true;
+    try {
+      for (let attempt = 0; attempt < 6; attempt++) {
+        const updaters = pendingUpdatersRef.current;
+        if (updaters.length === 0) return;
+        const expected = versionRef.current;
+        // Always rebase on the last known-committed server state, then
+        // replay every queued local edit on top of it in order.
+        let candidate = committedRef.current;
+        for (const fn of updaters) candidate = fn(candidate);
+
+        const { data: rows, error } = await supabase.rpc('hotel_app_state_cas', {
+          p_key: key,
+          p_expected_version: expected,
+          p_state_data: candidate as any,
+        });
+        if (error) { console.error('[hotel-sync] cas error', error); return; }
+        const row = Array.isArray(rows) ? (rows[0] as Row<T> | undefined) : (rows as Row<T> | null);
+        if (!row) return;
+        const newV = Number(row.version) || 0;
+
+        if (newV === expected + 1) {
+          // Success: the edits we just sent are now the committed base.
+          // Only remove the updaters we actually flushed — more may have
+          // been queued while this request was in flight.
+          pendingUpdatersRef.current = pendingUpdatersRef.current.slice(updaters.length);
+          versionRef.current = newV;
+          committedRef.current = candidate;
+          localEchoRef.current = newV;
+          if (pendingUpdatersRef.current.length === 0) return;
+          continue; // more edits queued mid-flight — flush those too
+        }
+
+        // CAS lost: someone else wrote first. Adopt their state as the new
+        // committed base and retry by reapplying *our* queued edits on top
+        // of it, so neither side's change is silently dropped.
         versionRef.current = newV;
-        localEchoRef.current = newV;
-        return;
+        committedRef.current = row.state_data as T;
       }
-      // CAS lost: pull latest, merge by overwriting with our intended value, retry
-      versionRef.current = newV;
-      setDataState(row.state_data as T);
-      // Re-apply our local change on top of the freshly fetched state
-      pendingRef.current = value;
+      // Ran out of retries — surface the best-effort merged state locally so
+      // the UI doesn't stay stuck showing an unsent local edit forever, and
+      // try again shortly.
+      if (pendingUpdatersRef.current.length > 0) {
+        let next = committedRef.current;
+        for (const fn of pendingUpdatersRef.current) next = fn(next);
+        setDataState(next);
+        flushTimerRef.current = setTimeout(() => { void flush(); }, FLUSH_MS * 4);
+      }
+    } finally {
+      flushingRef.current = false;
     }
   }, [key]);
 
 
   const setData = useCallback((updater: T | ((prev: T) => T)) => {
-    setDataState((prev) => {
-      const next = typeof updater === 'function' ? (updater as (p: T) => T)(prev) : updater;
-      pendingRef.current = next;
-      if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
-      flushTimerRef.current = setTimeout(() => { void flush(); }, FLUSH_MS);
-      return next;
-    });
+    const fn: (prev: T) => T = typeof updater === 'function' ? (updater as (p: T) => T) : () => updater;
+    pendingUpdatersRef.current.push(fn);
+    setDataState((prev) => fn(prev));
+    if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
+    flushTimerRef.current = setTimeout(() => { void flush(); }, FLUSH_MS);
   }, [flush]);
 
   return { data, setData, ready } as const;

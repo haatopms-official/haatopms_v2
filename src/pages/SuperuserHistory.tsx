@@ -295,13 +295,16 @@ function ExpandedDetails({
   admins: ReturnType<typeof useAdmins>["admins"];
   auditEvents: AuditEvent[];
 }) {
-  const admin = event.adminId ? admins.find((a) => a.id === event.adminId) : undefined;
+const admin = event.adminId ? admins.find((a) => a.id === event.adminId) : undefined;
 
-  // Show every action this user has ever performed (across all sessions),
-  // matched by adminId when available, otherwise by username + role.
+  // Show only the actions this user performed on the same calendar day as
+  // this login/logout event, matched by adminId when available, otherwise
+  // by username + role.
   const userActions = useMemo(() => {
+    const eventDay = new Date(event.at).toDateString();
     return auditEvents
       .filter((a) => {
+        if (new Date(a.at).toDateString() !== eventDay) return false;
         if (event.adminId) return a.actor.adminId === event.adminId;
         return a.actor.username === event.username && a.actor.role === event.role;
       })
