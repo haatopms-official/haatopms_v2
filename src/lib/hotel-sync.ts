@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
+const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string;
 
 export type HotelStateKey = 'bookings' | 'grid' | 'admins' | 'audit' | 'auth-history' | 'guests';
 
@@ -153,7 +155,7 @@ export function useSharedState<T>(key: HotelStateKey, initial: T) {
   }, [key]);
 
 
-  const setData = useCallback((updater: T | ((prev: T) => T)) => {
+const setData = useCallback((updater: T | ((prev: T) => T)) => {
     const fn: (prev: T) => T = typeof updater === 'function' ? (updater as (p: T) => T) : () => updater;
     pendingUpdatersRef.current.push(fn);
     setDataState((prev) => fn(prev));
@@ -161,5 +163,32 @@ export function useSharedState<T>(key: HotelStateKey, initial: T) {
     flushTimerRef.current = setTimeout(() => { void flush(); }, FLUSH_MS);
   }, [flush]);
 
-  return { data, setData, ready } as const;
+  // Best-effort SYNCHRONOUS-DISPATCH flush for page-unload moments (tab/
+  // browser closing). Regular fetches get killed mid-flight when the page
+  // unloads; a `keepalive` fetch is specifically exempted from that and is
+  // allowed to finish in the background. Used for things like "record this
+  // admin's logout" that must not be silently dropped on close.
+  const flushNow = useCallback(() => {
+    if (pendingUpdatersRef.current.length === 0) return;
+    let candidate = committedRef.current;
+    for (const fn of pendingUpdatersRef.current) candidate = fn(candidate);
+    try {
+      void fetch(`${SUPABASE_URL}/rest/v1/rpc/hotel_app_state_cas`, {
+        method: 'POST',
+        keepalive: true,
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+        },
+        body: JSON.stringify({
+          p_key: key,
+          p_expected_version: versionRef.current,
+          p_state_data: candidate,
+        }),
+      });
+    } catch { /* best effort only */ }
+  }, [key]);
+
+  return { data, setData, ready, flushNow } as const;
 }

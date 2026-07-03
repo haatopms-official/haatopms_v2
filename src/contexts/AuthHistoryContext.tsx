@@ -12,12 +12,13 @@ interface AuthHistoryContextValue {
   history: LoginEvent[];
   pushHistory: (ev: Omit<LoginEvent, 'id'>) => void;
   clearHistory: () => void;
+  flushHistory: () => void;
 }
 
 const AuthHistoryContext = createContext<AuthHistoryContextValue | undefined>(undefined);
 
 export function AuthHistoryProvider({ children }: { children: ReactNode }) {
-  const { data, setData } = useSharedState<LoginEvent[]>('auth-history', []);
+  const { data, setData, flushNow: flushHistory } = useSharedState<LoginEvent[]>('auth-history', []);
 
   const history = useMemo(
     () => (Array.isArray(data) ? (data as LoginEvent[]) : []),
@@ -39,9 +40,9 @@ export function AuthHistoryProvider({ children }: { children: ReactNode }) {
 
   const clearHistory = useCallback(() => setData([]), [setData]);
 
-  const value = useMemo(
-    () => ({ history, pushHistory, clearHistory }),
-    [history, pushHistory, clearHistory],
+const value = useMemo(
+    () => ({ history, pushHistory, clearHistory, flushHistory }),
+    [history, pushHistory, clearHistory, flushHistory],
   );
 
   return (

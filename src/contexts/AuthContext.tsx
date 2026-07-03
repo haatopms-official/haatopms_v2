@@ -49,7 +49,7 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const { findByUsername } = useAdmins();
   const { log } = useAudit();
-  const { history, pushHistory, clearHistory } = useAuthHistory();
+  const { history, pushHistory, clearHistory, flushHistory } = useAuthHistory();
 
   const [ready, setReady] = useState(false);
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -117,7 +117,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Auto-logout record when the browser tab/window is closed
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const handler = () => {
+const handler = () => {
       if (!user) return;
       try {
         pushHistory({
@@ -128,6 +128,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           adminId: user.adminId,
           displayName: user.displayName,
         });
+        flushHistory();
       } catch { /* ignore */ }
       try { sessionStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
     };
@@ -137,7 +138,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       window.removeEventListener("pagehide", handler);
       window.removeEventListener("beforeunload", handler);
     };
-  }, [user, pushHistory]);
+}, [user, pushHistory, flushHistory]);
 
   const login: AuthContextValue["login"] = useCallback(
     (username, password) => {
