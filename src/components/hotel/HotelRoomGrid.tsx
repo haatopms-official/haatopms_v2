@@ -1088,7 +1088,11 @@ export function HotelRoomGrid({ bookings, conflictBookings = bookings, onAddBook
         targetCheckIn = format(ci, 'yyyy-MM-dd');
         targetCheckOut = format(co, 'yyyy-MM-dd');
         // Superuser bypasses the past-date guard entirely.
-        if (!isSuperuser && isBefore(ci, today)) invalid = true;
+        // Also skip the guard when dates aren't changing (vertical hold-and-drop
+        // of an already-started / in-house booking to another room/category).
+        const datesUnchanged = targetCheckIn === original.checkIn && targetCheckOut === original.checkOut;
+        if (!isSuperuser && !datesUnchanged && isBefore(ci, today)) invalid = true;
+
         if (!invalid) {
           const sh = 2 * dayIdx + 1 - (original.checkInHalfDay ? 1 : 0);
           const eh = 2 * (dayIdx + nights) + 1 + (original.checkOutHalfDay ? 1 : 0);
