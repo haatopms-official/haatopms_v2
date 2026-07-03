@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { useHotelGrid } from '@/hooks/HotelGridContext';
+import { useSharedNamespace } from '@/hooks/useSharedNamespace';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -160,45 +162,49 @@ export function HotelGuestAnketaModal({ open, onClose, booking }: AnketaModalPro
   // anketa-specific saved blob AND the per-booking passport entered through
   // Guest Details. Result: anything captured anywhere about this booking is
   // already filled in here.
+// Cloud-synced record maps (keyed by booking id) backed by
+  // `public.hotel_app_state`. Same rows for every browser/role.
+  const { map: anketaMap, setRecord: setAnketaRecord } = useSharedNamespace('anketas', 'sayohat-anketa-changed');
+  const { map: passportMap } = useSharedNamespace('passports', 'sayohat-passport-changed');
+
   useEffect(() => {
     if (!open) return;
     if (!booking) { setForm(emptyForm(null)); return; }
     let base = emptyForm(booking);
-    try {
-      const raw = window.localStorage.getItem(STORAGE_PREFIX + booking.id);
-      if (raw) base = { ...base, ...(JSON.parse(raw) as Partial<AnketaForm>) };
-    } catch { /* ignore */ }
-    try {
-      const rawP = window.localStorage.getItem(PASSPORT_PREFIX + booking.id);
-      if (rawP) base = mergePassportIntoForm(base, JSON.parse(rawP) as StoredPassport);
-    } catch { /* ignore */ }
-    // Always honor the booking's actual category from the grid as the source
-    // of truth; the user can still override in the chip row below.
-    if (detectedCategoryId) base.roomType = detectedCategoryId;
-    setForm(base);
-  }, [open, booking, detectedCategoryId]);
-
-  // Live-react to passport edits made elsewhere (Guest Details panel saving
-  // while Anketa is open in another tab/role). Same merge-only-empty rule.
-  useEffect(() => {
-    if (!open || !booking) return;
-    const reload = () => {
+    const cloudAnketa = anketaMap[booking.id] as Partial<AnketaForm> | undefined;
+    if (cloudAnketa) {
+      base = { ...base, ...cloudAnketa };
+    } else {
+      try {
+        const raw = window.localStorage.getItem(STORAGE_PREFIX + booking.id);
+        if (raw) {
+          const legacy = JSON.parse(raw) as Partial<AnketaForm>;
+          base = { ...base, ...legacy };
+          setAnketaRecord(booking.id, base);
+        }
+      } catch { /* ignore */ }
+    }
+    const cloudPassport = passportMap[booking.id] as StoredPassport | undefined;
+    if (cloudPassport) {
+      base = mergePassportIntoForm(base, cloudPassport);
+    } else {
       try {
         const rawP = window.localStorage.getItem(PASSPORT_PREFIX + booking.id);
-        if (!rawP) return;
-        setForm((prev) => mergePassportIntoForm(prev, JSON.parse(rawP) as StoredPassport));
+        if (rawP) base = mergePassportIntoForm(base, JSON.parse(rawP) as StoredPassport);
       } catch { /* ignore */ }
-    };
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === PASSPORT_PREFIX + booking.id) reload();
-    };
-    window.addEventListener('storage', onStorage);
-    window.addEventListener('sayohat-passport-changed', reload);
-    return () => {
-      window.removeEventListener('storage', onStorage);
-      window.removeEventListener('sayohat-passport-changed', reload);
-    };
-  }, [open, booking]);
+    }
+    if (detectedCategoryId) base.roomType = detectedCategoryId;
+    setForm(base);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, booking, detectedCategoryId, anketaMap[booking?.id ?? ''], passportMap[booking?.id ?? '']]);
+
+  useEffect(() => {
+    if (!open || !booking) return;
+    const cloudPassport = passportMap[booking.id] as StoredPassport | undefined;
+    if (!cloudPassport) return;
+    setForm((prev) => mergePassportIntoForm(prev, cloudPassport));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, booking, passportMap[booking?.id ?? '']]);
 
   const update = <K extends keyof AnketaForm>(key: K, value: AnketaForm[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -246,8 +252,9 @@ export function HotelGuestAnketaModal({ open, onClose, booking }: AnketaModalPro
       toast.error('Эл. почта должна содержать «@» — например email@example.com');
       return;
     }
-    try {
-      window.localStorage.setItem(STORAGE_PREFIX + booking.id, JSON.stringify(form));
+try {
+      setAnketaRecord(booking.id, form);
+      window.localStorage.setItem(STORAGE_PREFIX + booking.id, JSON.stringify(form)); // offline fallback only
       toast.success(t('anketaSaved'));
       setDirty(false);
       onClose();

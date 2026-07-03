@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { HotelDatePicker } from './HotelDatePicker';
+import { CountrySelect } from './CountrySelect';
+import { useSharedNamespace } from '@/hooks/useSharedNamespace';
 import { VisuallyHidden } from '@radix-ui/react-visually-hidden';
 import {
   Activity,
@@ -107,48 +110,45 @@ export function GuestDetailsWindow({ open, onClose, guest }: GuestDetailsWindowP
     return next;
   };
 
+const { map: passportMap, setRecord: setPassportRecord } = useSharedNamespace('passports', 'sayohat-passport-changed');
+
   const [passport, setPassport] = useState<PassportData>(EMPTY_PASSPORT);
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const load = () => {
-      try {
-        const raw = window.localStorage.getItem(storageKey);
-        const parsed = raw ? (JSON.parse(raw) as Record<string, string>) : {};
-        // Keep passport series and number split so Guest Details matches the Anketa layout.
-        const legacySeries = (parsed.passportSeries || '').toString().trim().toUpperCase();
-        const legacyNumber = (parsed.passportNumber || '').toString().trim();
-        if (legacySeries && !/^[A-Z\u0400-\u04FF]{1,2}\s/.test(legacyNumber)) {
-          const digits = legacyNumber.replace(/\D/g, '');
-          parsed.passportSeries = legacySeries.slice(0, 2);
-          parsed.passportNumber = digits;
-        }
-        const base = { ...EMPTY_PASSPORT, ...(parsed as Partial<PassportData>) };
-        setPassport(buildAutoFill(base));
-      } catch {
-        setPassport(buildAutoFill(EMPTY_PASSPORT));
+    const normalize = (parsed: Record<string, string>) => {
+      const legacySeries = (parsed.passportSeries || '').toString().trim().toUpperCase();
+      const legacyNumber = (parsed.passportNumber || '').toString().trim();
+      if (legacySeries && !/^[A-Z\u0400-\u04FF]{1,2}\s/.test(legacyNumber)) {
+        const digits = legacyNumber.replace(/\D/g, '');
+        parsed.passportSeries = legacySeries.slice(0, 2);
+        parsed.passportNumber = digits;
       }
+      return { ...EMPTY_PASSPORT, ...(parsed as Partial<PassportData>) };
     };
-    load();
-    const onStorage = (e: StorageEvent) => { if (e.key === storageKey) load(); };
-    const onCustom = () => load();
-    window.addEventListener('storage', onStorage);
-    window.addEventListener('sayohat-passport-changed', onCustom);
-    return () => {
-      window.removeEventListener('storage', onStorage);
-      window.removeEventListener('sayohat-passport-changed', onCustom);
-    };
+
+    const cloud = passportMap[storageKey] as Record<string, string> | undefined;
+    if (cloud) {
+      setPassport(buildAutoFill(normalize({ ...cloud })));
+      return;
+    }
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      if (raw) {
+        const parsed = normalize(JSON.parse(raw) as Record<string, string>);
+        setPassport(buildAutoFill(parsed));
+        setPassportRecord(storageKey, parsed);
+        return;
+      }
+    } catch { /* ignore */ }
+    setPassport(buildAutoFill(EMPTY_PASSPORT));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [storageKey, guest.guestLastName, guest.guestFirstName, guest.guestMiddleName]);
+  }, [storageKey, guest.guestLastName, guest.guestFirstName, guest.guestMiddleName, passportMap[storageKey]]);
 
   const updatePassport = (key: PassportKey, value: string) => {
     setPassport((prev) => {
       const next = { ...prev, [key]: value };
-      try {
-        window.localStorage.setItem(storageKey, JSON.stringify(next));
-        window.dispatchEvent(new Event('sayohat-passport-changed'));
-      } catch {
-        /* ignore quota errors */
-      }
+      setPassportRecord(storageKey, next);
+      try { window.localStorage.setItem(storageKey, JSON.stringify(next)); } catch { /* ignore quota errors */ }
       return next;
     });
   };
