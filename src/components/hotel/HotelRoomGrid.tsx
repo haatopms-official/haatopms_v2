@@ -244,6 +244,7 @@ export function HotelRoomGrid({ bookings, conflictBookings = bookings, onAddBook
   const { user } = useAuth();
   const isManager = user?.role === 'manager';
   const isAdmin = user?.role === 'admin';
+  const isSuperuser = user?.role === 'superuser';
   // Admin is restricted: cannot add/remove categories or rooms (only guests).
   const canManageStructure = !isAdmin;
   const canEditRate = user?.role === 'manager' || user?.role === 'superuser';
@@ -942,9 +943,11 @@ export function HotelRoomGrid({ bookings, conflictBookings = bookings, onAddBook
   const moveActive = moveGhost != null;
 
   const handleBookingMoveStart = useCallback((booking: Booking, e: React.MouseEvent) => {
-    if (isBefore(parseISO(booking.checkOut), today)) return; // past bookings: do not move
-    // Admin panel: once a booking is checked in (in-house), block middle-mouse drag.
-    if (isAdmin && booking.status === 'in-house') return;
+    // Superuser is unrestricted: can drag any booking (past, in-house, dirty, maintenance...).
+    if (!isSuperuser) {
+      if (isBefore(parseISO(booking.checkOut), today)) return; // past bookings: do not move
+      // Admin can now drag in-house bookings too — but only vertically (enforced in the drag loop).
+    }
     const target = e.currentTarget as HTMLElement;
     const rect = target.getBoundingClientRect();
     const ghost: MoveGhost = {
@@ -966,7 +969,7 @@ export function HotelRoomGrid({ bookings, conflictBookings = bookings, onAddBook
       snapHeight: null,
     };
     setMoveGhost(ghost);
-  }, [today, isAdmin]);
+  }, [today, isSuperuser]);
 
   // Imperative ghost overlay handle — lets us move the ghost via CSS transforms
   // every frame without re-rendering the entire grid through React state.
@@ -1067,16 +1070,25 @@ export function HotelRoomGrid({ bookings, conflictBookings = bookings, onAddBook
         const bedRaw = row.dataset.bedIndex ?? '';
         const rBed = bedRaw === '' ? undefined : Number(bedRaw);
         const rowRect = row.getBoundingClientRect();
-        const x = lastX - rowRect.left - ghost.offsetX + HALF_COL_WIDTH;
-        const dayIdx = Math.max(0, Math.min(totalDaysRef.current - 1, Math.round(x / DAY_WIDTH)));
         const dts = datesRef.current;
+        let dayIdx: number;
+        if (isAdmin) {
+          // Admin: vertical-only movement. Lock the horizontal position to the
+          // booking's original check-in day so dates never change during drag.
+          dayIdx = Math.max(0, Math.min(totalDaysRef.current - 1,
+            differenceInCalendarDays(parseISO(original.checkIn), dts[0])));
+        } else {
+          const x = lastX - rowRect.left - ghost.offsetX + HALF_COL_WIDTH;
+          dayIdx = Math.max(0, Math.min(totalDaysRef.current - 1, Math.round(x / DAY_WIDTH)));
+        }
         const ci = dts[dayIdx];
         const co = addDays(ci, nights);
         targetRoom = rRoom;
         targetBed = rBed;
         targetCheckIn = format(ci, 'yyyy-MM-dd');
         targetCheckOut = format(co, 'yyyy-MM-dd');
-        if (isBefore(ci, today)) invalid = true;
+        // Superuser bypasses the past-date guard entirely.
+        if (!isSuperuser && isBefore(ci, today)) invalid = true;
         if (!invalid) {
           const sh = 2 * dayIdx + 1 - (original.checkInHalfDay ? 1 : 0);
           const eh = 2 * (dayIdx + nights) + 1 + (original.checkOutHalfDay ? 1 : 0);
@@ -1195,7 +1207,7 @@ export function HotelRoomGrid({ bookings, conflictBookings = bookings, onAddBook
       window.removeEventListener('scroll', onScroll, true);
       document.removeEventListener('mouseleave', onCancel);
     };
-  }, [moveActive, today, t, hasBookingConflict, lang]);
+  }, [moveActive, today, t, hasBookingConflict, lang, isAdmin, isSuperuser]);
 
   const moveResolvedRef = useRef(false);
   const confirmMove = useCallback(() => {

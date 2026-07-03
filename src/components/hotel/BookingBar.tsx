@@ -267,7 +267,9 @@ export const BookingBar = memo(function BookingBar({ booking, leftPx, widthPx, o
       ref={barRef}
       onMouseDown={(e) => {
         // Middle mouse button initiates booking move (drag-to-relocate).
-        if (e.button === 1 && onMoveStart && !isPast) {
+        // Whether past bookings are movable is decided by the parent (superuser
+        // is allowed to move any booking regardless of date/status).
+        if (e.button === 1 && onMoveStart) {
           e.preventDefault();
           e.stopPropagation();
           onMoveStart(booking, e);
